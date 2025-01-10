@@ -1,12 +1,14 @@
+import mimetypes
 from io import BytesIO
 from uuid import uuid4
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import FastAPI, File, HTTPException, UploadFile, status
+from fastapi import FastAPI, File, HTTPException, UploadFile
 
-from database import SessionDep, UserTable
-from models import Image, User, UserCreate
+from database import ImageTable, SessionDep, UserImageTable, UserTable
+from mock_descripton_service import get_image_description
+from models import User, UserCreate
 
 app = FastAPI()
 
@@ -19,15 +21,42 @@ async def root():
     return {"Hello": "World"}
 
 
+# TODO: Get user's images and implement redis caching
+
+
 # File operations
-@app.post("/upload")
-async def upload_image(user_id: str, file: UploadFile = File(...)):
+@app.post("/upload/{user_id}")
+async def upload_image(user_id: str, db: SessionDep, file: UploadFile = File(...)):
     try:
+
+        # Upload to s3
         file_content = await file.read()
         file_obj = BytesIO(file_content)
+        content_type = mimetypes.guess_type(file.filename)
+        if not content_type:
+            content_type = "application/octet-stream"
+        else:
+            content_type = content_type[0]
 
-        s3_key = str(uuid4())
-        s3.upload_fileobj(file_obj, BUCKET_NAME, s3_key)
+        image_id = str(uuid4())
+
+        s3_key = f"{user_id}/{image_id}"
+        s3.upload_fileobj(
+            file_obj, BUCKET_NAME, s3_key, ExtraArgs={"ContentType": content_type}
+        )
+
+        public_url = f"https://{BUCKET_NAME}.s3.amazonaws.com/{s3_key}"
+
+        # Upload to DB
+        desc = get_image_description()
+
+        image_entry = ImageTable(id=image_id, url=public_url, desc=desc)
+        user_image_relation = UserImageTable(user_id=user_id, image_id=image_id)
+        db.add(image_entry)
+        db.add(user_image_relation)
+        db.commit()
+
+        return {"message": "File uploaded successfully", "url": public_url}
 
     except (BotoCoreError, ClientError) as e:
         # Handle S3 errors

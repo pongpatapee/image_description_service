@@ -2,7 +2,7 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import Depends
-from sqlalchemy import Column, Integer, String, create_engine
+from sqlalchemy import Column, ForeignKey, String, create_engine
 
 # from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.ext.declarative import declarative_base
@@ -22,6 +22,25 @@ class UserTable(Base):
     name = Column(String, nullable=False)
     # email = Column(String, nullable=False, unique=True)
     email = Column(String, nullable=False)
+
+    # images = relationship("UserImageTable", back_populates="user")
+
+
+class ImageTable(Base):
+    __tablename__ = "images"
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    url = Column(String, nullable=False)
+    desc = Column(String, nullable=False)
+
+    # users = relationship("UserImageTable", back_populates="image")
+
+
+class UserImageTable(Base):
+    __tablename__ = "users_images"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(String, ForeignKey("users.id"), nullable=False)
+    image_id = Column(String, ForeignKey("images.id"), nullable=False)
 
 
 def get_db():
