@@ -9,12 +9,12 @@ class UserCreate(BaseModel):
 
 
 class User(BaseModel):
-    id: UUID
+    id: str
     name: str
     email: str
 
 
 class Image(BaseModel):
-    id: UUID
+    id: str
     url: str
     desc: str

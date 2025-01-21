@@ -1,19 +1,34 @@
+import json
 import mimetypes
+import time
 from io import BytesIO
 from uuid import uuid4
 
 import boto3
+import redis
 from botocore.exceptions import BotoCoreError, ClientError
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 
 from database import ImageTable, SessionDep, UserImageTable, UserTable
 from mock_descripton_service import get_image_description
-from models import User, UserCreate
+from models import Image, User, UserCreate
 
 app = FastAPI()
+redis_client = redis.Redis(host="localhost", port=6379, db=0)
 
 BUCKET_NAME = "wh1fty-test"
+DEFAULT_EXPIRATION = 3600
+
 s3 = boto3.client("s3")
+
+
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    process_time = time.perf_counter() - start_time
+    response.headers["X-Process-Time"] = f"{process_time:.2f} ms"
+    return response
 
 
 @app.get("/")
@@ -21,11 +36,42 @@ async def root():
     return {"Hello": "World"}
 
 
-# TODO: Get user's images and implement redis caching
+@app.get("/images/{user_id}")
+async def get_all_user_images(user_id: str, db: SessionDep):
+    try:
+        img_data = redis_client.get(f"img:{user_id}")
+
+        if img_data:
+            print("cache hit")
+            return json.loads(img_data.decode("utf-8"))
+        else:
+            print("cache miss")
+            img_data = (
+                db.query(ImageTable)
+                .join(UserImageTable, ImageTable.id == UserImageTable.image_id)
+                .filter(UserImageTable.user_id == user_id)
+                .all()
+            )
+
+            img_respose = [
+                Image(id=img_item.id, url=img_item.url, desc=img_item.desc).model_dump()
+                for img_item in img_data
+            ]
+
+            redis_client.setex(
+                f"img:{user_id}",
+                DEFAULT_EXPIRATION,
+                json.dumps(img_respose),
+            )
+
+            return img_data
+
+    except Exception as e:
+        print(f"Error occured: {e}")
 
 
 # File operations
-@app.post("/upload/{user_id}")
+@app.post("/images/upload/{user_id}")
 async def upload_image(user_id: str, db: SessionDep, file: UploadFile = File(...)):
     try:
 
@@ -55,6 +101,9 @@ async def upload_image(user_id: str, db: SessionDep, file: UploadFile = File(...
         db.add(image_entry)
         db.add(user_image_relation)
         db.commit()
+
+        # invalidate cache
+        redis_client.delete(f"img:{user_id}")
 
         return {"message": "File uploaded successfully", "url": public_url}
 
